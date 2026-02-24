@@ -1,0 +1,40 @@
+html,
+body {
+  margin: 0;
+  overflow: hidden;
+  font-family: Inter, Arial, sans-serif;
+  background: #111;
+  color: #f2f2f2;
+}
+
+canvas {
+  display: block;
+}
+
+#hud {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  max-width: 520px;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.48);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 12px 14px;
+  backdrop-filter: blur(2px);
+}
+
+#hud h1 {
+  margin: 0 0 8px;
+  color: #88ff8d;
+  font-size: 18px;
+}
+
+#hud p {
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+#status {
+  color: #ffcf80;
+}
