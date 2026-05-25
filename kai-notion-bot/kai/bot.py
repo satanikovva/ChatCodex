@@ -15,6 +15,7 @@ from kai.conversation import ConversationMemory
 from kai.llm_client import ask_llm
 from kai.memory import KaiMemory
 from kai.notion_client import NotionSaver
+from kai.notion_reader import NotionReader
 from kai.profile import format_profile_for_prompt, load_profile
 from kai.prompts import build_saved_text
 from kai.schemas import Draft, DraftStatus, EntryKind, NotionTarget
@@ -28,6 +29,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 storage = DraftStorage(str(BASE_DIR / "data" / "kai.sqlite"))
 kmemory = KaiMemory(str(BASE_DIR / settings.kai_memory_db_path))
 cmemory = ConversationMemory(str(BASE_DIR / settings.kai_conversation_db_path))
+notion_reader = NotionReader(settings)
 dp = Dispatcher()
 
 TARGET_MAP = {
@@ -47,6 +49,70 @@ ENTRY_MAP = {
     "physics": EntryKind.PHYSICS,
     "apv": EntryKind.APV,
 }
+
+
+def _should_use_notion_context(text: str) -> bool:
+    t = text.lower()
+    triggers = (
+        "что я писала про",
+        "найди записи про",
+        "были ли у меня сны про",
+        "что у меня есть по",
+        "какие паттерны",
+        "что я отмечала",
+        "посмотри в notion",
+    )
+    return any(x in t for x in triggers)
+
+
+@dp.message(Command("recent"))
+async def recent_cmd(message: Message) -> None:
+    parts = (message.text or "").split(maxsplit=1)
+    target = parts[1].strip().lower() if len(parts) > 1 else "notes"
+    pages = notion_reader.get_recent(target=target, limit=5)
+    if not pages:
+        await message.answer("Ничего не нашёл в этой базе.")
+        return
+    text = notion_reader.format_pages_for_prompt(pages)
+    await message.answer(text[:3800])
+
+
+@dp.message(Command("find"))
+async def find_cmd(message: Message) -> None:
+    query = (message.text or "").replace("/find", "", 1).strip()
+    if not query:
+        await message.answer("Напиши после /find, что искать.")
+        return
+    pages = notion_reader.search_text(query=query, limit=8)
+    notion_context = notion_reader.format_pages_for_prompt(pages)
+    profile = load_profile(str(BASE_DIR / settings.kai_profile_path))
+    decision = ask_llm(
+        f"Кратко перескажи, что найдено по запросу: {query}. Укажи, из каких баз это взято.",
+        profile_context=format_profile_for_prompt(profile),
+        memory_context=kmemory.format_for_prompt(limit=20),
+        conversation_context=cmemory.format_recent_messages(chat_id=message.chat.id, limit=settings.kai_conversation_history_limit),
+        notion_context=notion_context,
+    )
+    await message.answer(decision.reply)
+
+
+@dp.message(Command("patterns"))
+async def patterns_cmd(message: Message) -> None:
+    pages = (
+        notion_reader.get_recent("notes", 8)
+        + notion_reader.get_recent("dreams", 8)
+        + notion_reader.get_recent("observations", 8)
+    )
+    notion_context = notion_reader.format_pages_for_prompt(pages)
+    profile = load_profile(str(BASE_DIR / settings.kai_profile_path))
+    decision = ask_llm(
+        "Найди 1-3 сильных повторяющихся паттерна. Разделяй факты и гипотезы. Начни с фразы: 'Вот что я вижу как возможные паттерны, не как окончательный диагноз.'",
+        profile_context=format_profile_for_prompt(profile),
+        memory_context=kmemory.format_for_prompt(limit=20),
+        conversation_context=cmemory.format_recent_messages(chat_id=message.chat.id, limit=settings.kai_conversation_history_limit),
+        notion_context=notion_context,
+    )
+    await message.answer(decision.reply)
 
 
 @dp.message(Command("profile"))
@@ -93,11 +159,18 @@ async def handle_text(message: Message) -> None:
     memory_context = kmemory.format_for_prompt(limit=20)
     conversation_context = cmemory.format_recent_messages(chat_id=chat_id, limit=settings.kai_conversation_history_limit)
 
+    notion_context = ""
+    if _should_use_notion_context(message.text):
+        search_query = message.text
+        pages = notion_reader.search_text(query=search_query, limit=8)
+        notion_context = notion_reader.format_pages_for_prompt(pages)
+
     decision = ask_llm(
         message.text,
         profile_context=profile_context,
         memory_context=memory_context,
         conversation_context=conversation_context,
+        notion_context=notion_context,
     )
 
     cmemory.add_message(chat_id, "user", message.text)

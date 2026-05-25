@@ -52,3 +52,13 @@ python -m kai.bot
 ## Безопасность
 - Ничего не сохраняется в Notion без подтверждения пользователя.
 - Groq не получает Notion токен.
+
+
+## Чтение Notion
+Команды:
+- `/recent notes`
+- `/recent dreams`
+- `/recent physics`
+- `/recent apv`
+- `/find ...`
+- `/patterns`

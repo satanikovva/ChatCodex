@@ -36,6 +36,7 @@ def ask_llm(
     profile_context: str = "",
     memory_context: str = "",
     conversation_context: str = "",
+    notion_context: str = "",
 ) -> LLMDecision:
     settings = load_settings()
     if settings.llm_provider.lower() != "groq" or not settings.groq_api_key or not settings.groq_model:
@@ -59,6 +60,11 @@ def ask_llm(
 
 Краткосрочный контекст текущего разговора:
 {conversation_context}
+
+Ниже может быть контекст из Notion. Используй его только если он релевантен вопросу пользователя. Не выдумывай записи, которых нет в контексте.
+
+Контекст из Notion:
+{notion_context}
 
 Верни только JSON формата:
 {{
