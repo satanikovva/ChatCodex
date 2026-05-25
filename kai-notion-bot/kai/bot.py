@@ -5,23 +5,29 @@ import logging
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from kai.classifier import make_draft
 from kai.config import load_settings
 from kai.consent import decision_keyboard
+from kai.conversation import ConversationMemory
 from kai.llm_client import ask_llm
+from kai.memory import KaiMemory
 from kai.notion_client import NotionSaver
+from kai.profile import format_profile_for_prompt, load_profile
 from kai.prompts import build_saved_text
 from kai.schemas import Draft, DraftStatus, EntryKind, NotionTarget
 from kai.storage import DraftStorage
 
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+settings = load_settings()
 BASE_DIR = Path(__file__).resolve().parents[1]
 storage = DraftStorage(str(BASE_DIR / "data" / "kai.sqlite"))
+kmemory = KaiMemory(str(BASE_DIR / settings.kai_memory_db_path))
+cmemory = ConversationMemory(str(BASE_DIR / settings.kai_conversation_db_path))
 dp = Dispatcher()
 
 TARGET_MAP = {
@@ -43,42 +49,90 @@ ENTRY_MAP = {
 }
 
 
+@dp.message(Command("profile"))
+async def profile_cmd(message: Message) -> None:
+    profile = load_profile(str(BASE_DIR / settings.kai_profile_path))
+    topics = ", ".join(profile.get("core_topics", []))
+    await message.answer(
+        f"Пользователь: {profile.get('user_name', '')}\n"
+        f"Помощник: {profile.get('assistant_name', '')}\n"
+        f"Темы: {topics}\n"
+        f"Политика сохранения: {profile.get('save_policy', '')}"
+    )
+
+
+@dp.message(Command("remember"))
+async def remember_cmd(message: Message) -> None:
+    text = message.text or ""
+    value = text.replace("/remember", "", 1).strip()
+    if not value:
+        await message.answer("Напиши после /remember, что запомнить.")
+        return
+    kmemory.add_memory(key="user_fact", value=value, source_text=text)
+    await message.answer("Запомнил ✓")
+
+
+@dp.message(Command("memory"))
+async def memory_cmd(message: Message) -> None:
+    items = kmemory.list_memories(limit=20)
+    if not items:
+        await message.answer("Память пока пуста.")
+        return
+    lines = [f"- {it['key']}: {it['value']}" for it in items]
+    await message.answer("Последняя память:\n" + "\n".join(lines))
+
+
 @dp.message(F.text)
 async def handle_text(message: Message) -> None:
     if not message.text or not message.from_user:
         return
 
-    decision = ask_llm(message.text)
-    await message.answer(decision.reply)
+    chat_id = message.chat.id
+    profile = load_profile(str(BASE_DIR / settings.kai_profile_path))
+    profile_context = format_profile_for_prompt(profile)
+    memory_context = kmemory.format_for_prompt(limit=20)
+    conversation_context = cmemory.format_recent_messages(chat_id=chat_id, limit=settings.kai_conversation_history_limit)
 
-    if not decision.should_offer_save:
-        return
-
-    draft: Draft
-    mapped_target = TARGET_MAP.get((decision.save_target or "").lower())
-    mapped_entry = ENTRY_MAP.get((decision.entry_kind or "").lower())
-
-    if mapped_target and mapped_entry:
-        fallback = make_draft(message.from_user.id, message.chat.id, message.text)
-        draft = Draft(
-            id=None,
-            user_id=message.from_user.id,
-            chat_id=message.chat.id,
-            source_text=decision.text_to_save or message.text,
-            title=decision.title or fallback.title,
-            entry_kind=mapped_entry,
-            notion_target=mapped_target,
-            created_date=fallback.created_date,
-            status=DraftStatus.PENDING,
-        )
-    else:
-        draft = make_draft(message.from_user.id, message.chat.id, decision.text_to_save or message.text)
-
-    draft = storage.create_draft(draft)
-    await message.answer(
-        f"Хочешь, сохраню это в Notion?\nБаза: {draft.notion_target.value}\nНазвание: {draft.title}",
-        reply_markup=decision_keyboard(draft.id or 0),
+    decision = ask_llm(
+        message.text,
+        profile_context=profile_context,
+        memory_context=memory_context,
+        conversation_context=conversation_context,
     )
+
+    cmemory.add_message(chat_id, "user", message.text)
+    await message.answer(decision.reply)
+    cmemory.add_message(chat_id, "assistant", decision.reply)
+
+    if decision.should_offer_save:
+        mapped_target = TARGET_MAP.get((decision.save_target or "").lower())
+        mapped_entry = ENTRY_MAP.get((decision.entry_kind or "").lower())
+        if mapped_target and mapped_entry:
+            fallback = make_draft(message.from_user.id, message.chat.id, message.text)
+            draft = Draft(
+                id=None,
+                user_id=message.from_user.id,
+                chat_id=message.chat.id,
+                source_text=decision.text_to_save or message.text,
+                title=decision.title or fallback.title,
+                entry_kind=mapped_entry,
+                notion_target=mapped_target,
+                created_date=fallback.created_date,
+                status=DraftStatus.PENDING,
+            )
+        else:
+            draft = make_draft(message.from_user.id, message.chat.id, decision.text_to_save or message.text)
+
+        draft = storage.create_draft(draft)
+        save_msg = (
+            f"Хочешь, сохраню это в Notion?\n"
+            f"База: {draft.notion_target.value}\n"
+            f"Название: {draft.title}"
+        )
+        await message.answer(save_msg, reply_markup=decision_keyboard(draft.id or 0))
+        cmemory.add_message(chat_id, "assistant", save_msg)
+
+    cmemory.trim_chat_history(chat_id=chat_id, keep_last=80)
 
 
 @dp.callback_query(F.data.startswith("save:"))
@@ -86,7 +140,6 @@ async def save_draft(callback: CallbackQuery) -> None:
     if not callback.data or not callback.message:
         await callback.answer()
         return
-
     draft_id = int(callback.data.split(":", maxsplit=1)[1])
     draft = storage.get_draft(draft_id)
     if draft is None:
@@ -97,9 +150,7 @@ async def save_draft(callback: CallbackQuery) -> None:
         await callback.message.answer("Этот черновик уже обработан.")
         await callback.answer()
         return
-
     try:
-        settings = load_settings()
         notion = NotionSaver(settings)
         notion.save_draft(draft)
     except Exception as exc:
@@ -107,7 +158,6 @@ async def save_draft(callback: CallbackQuery) -> None:
         await callback.message.answer(f"Не удалось сохранить в Notion: {exc}")
         await callback.answer()
         return
-
     storage.set_status(draft_id, DraftStatus.SAVED)
     await callback.message.answer(build_saved_text(draft))
     await callback.answer()
@@ -127,7 +177,6 @@ async def cancel_draft(callback: CallbackQuery) -> None:
 
 
 async def main() -> None:
-    settings = load_settings()
     bot = Bot(token=settings.telegram_bot_token)
     await dp.start_polling(bot)
 

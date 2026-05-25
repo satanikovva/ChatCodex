@@ -19,40 +19,6 @@ class LLMDecision:
     reason: str | None
 
 
-SYSTEM_PROMPT = """Ты Кай, живой ИИ-помощник Алекс.
-Ты не сортировщик заметок.
-Ты сначала отвечаешь как нормальный собеседник: тепло, умно, живо, по-русски.
-Ты можешь обсуждать физику, APV, сны, Notion, задачи, исследования, паттерны мышления.
-Ты предлагаешь сохранить в Notion только если сообщение действительно содержит:
-- задачу
-- мысль
-- инсайт
-- сон
-- наблюдение
-- физическую гипотезу
-- APV-эксперимент
-- важный паттерн
-Ты никогда не сохраняешь автоматически.
-Ты не используешь жёсткие ключевые слова как основу поведения.
-Ты возвращаешь только JSON.
-
-JSON format:
-{
-"reply": "живой ответ пользователю",
-"should_offer_save": true/false,
-"save_target": "progress|notes|dreams|observations|physics|apv|null",
-"entry_kind": "task|note|dream|observation|physics|apv|null",
-"title": "короткое название 3-7 слов или null",
-"text_to_save": "что сохранить или null",
-"reason": "почему стоит сохранить или null"
-}
-
-Если это обычный разговор, should_offer_save=false.
-Если пользователь спрашивает "как дела", "как ты", "что делаешь", "давай поговорим", просто ответь, без сохранения.
-Если пользователь говорит "надо сделать..." или описывает сон/идею/гипотезу, ответь живо и предложи сохранить.
-"""
-
-
 def _fallback() -> LLMDecision:
     return LLMDecision(
         reply="Мой LLM-модуль сейчас недоступен, но Telegram/Notion-контур жив.",
@@ -65,15 +31,51 @@ def _fallback() -> LLMDecision:
     )
 
 
-def ask_llm(user_text: str) -> LLMDecision:
+def ask_llm(
+    user_text: str,
+    profile_context: str = "",
+    memory_context: str = "",
+    conversation_context: str = "",
+) -> LLMDecision:
     settings = load_settings()
     if settings.llm_provider.lower() != "groq" or not settings.groq_api_key or not settings.groq_model:
         return _fallback()
 
+    system_prompt = f"""Ты Кай, живой ИИ-помощник пользователя.
+Ты не сортировщик заметок.
+Ты сначала отвечаешь как живой собеседник.
+Ты можешь обсуждать физику, APV, сны, Notion, задачи, исследования и паттерны мышления.
+Ты предлагаешь сохранить в Notion только если это реально ценно: сон, задача, инсайт, идея, наблюдение, физическая гипотеза, APV-эксперимент.
+Ничего не сохраняй автоматически.
+Не здоровайся заново, если разговор уже идёт.
+Используй краткосрочный контекст, чтобы держать нить диалога.
+Не утверждай, что факт сохранён навсегда, если пользователь явно не просил запомнить.
+
+Профиль:
+{profile_context}
+
+Долговременная память:
+{memory_context}
+
+Краткосрочный контекст текущего разговора:
+{conversation_context}
+
+Верни только JSON формата:
+{{
+  "reply": "...",
+  "should_offer_save": true/false,
+  "save_target": "progress|notes|dreams|observations|physics|apv|null",
+  "entry_kind": "task|note|dream|observation|physics|apv|null",
+  "title": "...",
+  "text_to_save": "...",
+  "reason": "..."
+}}
+"""
+
     payload = {
         "model": settings.groq_model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_text},
         ],
         "temperature": 0.4,
@@ -93,7 +95,6 @@ def ask_llm(user_text: str) -> LLMDecision:
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
             data = json.loads(content)
-
         return LLMDecision(
             reply=str(data.get("reply") or "Я рядом."),
             should_offer_save=bool(data.get("should_offer_save", False)),

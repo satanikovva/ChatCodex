@@ -25,6 +25,10 @@ class Settings(BaseModel):
     groq_api_key: str = Field(default="")
     groq_model: str = Field(default="")
     llm_timeout_seconds: int = Field(default=30, ge=1, le=120)
+    kai_profile_path: str = Field(default="data/kai_profile.json")
+    kai_memory_db_path: str = Field(default="data/kai_memory.sqlite")
+    kai_conversation_db_path: str = Field(default="data/kai_conversation.sqlite")
+    kai_conversation_history_limit: int = Field(default=20, ge=1, le=200)
 
 
 @lru_cache(maxsize=1)
@@ -46,6 +50,10 @@ def load_settings() -> Settings:
         "groq_api_key": os.getenv("GROQ_API_KEY", "").strip(),
         "groq_model": os.getenv("GROQ_MODEL", "").strip(),
         "llm_timeout_seconds": int(os.getenv("LLM_TIMEOUT_SECONDS", "30").strip() or "30"),
+        "kai_profile_path": os.getenv("KAI_PROFILE_PATH", "data/kai_profile.json").strip(),
+        "kai_memory_db_path": os.getenv("KAI_MEMORY_DB_PATH", "data/kai_memory.sqlite").strip(),
+        "kai_conversation_db_path": os.getenv("KAI_CONVERSATION_DB_PATH", "data/kai_conversation.sqlite").strip(),
+        "kai_conversation_history_limit": int(os.getenv("KAI_CONVERSATION_HISTORY_LIMIT", "20").strip() or "20"),
     }
     try:
         return Settings.model_validate(raw)
