@@ -40,3 +40,4 @@ class Draft:
     notion_target: NotionTarget
     created_date: date
     status: DraftStatus = DraftStatus.PENDING
+    reason: str | None = None

@@ -14,10 +14,9 @@ from kai.consent import decision_keyboard
 from kai.conversation import ConversationMemory
 from kai.llm_client import ask_llm
 from kai.memory import KaiMemory
-from kai.notion_client import NotionSaver
+from kai.obsidian_saver import ObsidianSaver
 from kai.notion_reader import NotionReader
 from kai.profile import format_profile_for_prompt, load_profile
-from kai.prompts import build_saved_text
 from kai.schemas import Draft, DraftStatus, EntryKind, NotionTarget
 from kai.storage import DraftStorage
 
@@ -192,14 +191,16 @@ async def handle_text(message: Message) -> None:
                 notion_target=mapped_target,
                 created_date=fallback.created_date,
                 status=DraftStatus.PENDING,
+                reason=decision.reason,
             )
         else:
             draft = make_draft(message.from_user.id, message.chat.id, decision.text_to_save or message.text)
+            draft.reason = decision.reason
 
         draft = storage.create_draft(draft)
         save_msg = (
-            f"Хочешь, сохраню это в Notion?\n"
-            f"База: {draft.notion_target.value}\n"
+            f"Хочешь, сохраню это в Obsidian?\n"
+            f"Папка: {draft.notion_target.value}\n"
             f"Название: {draft.title}"
         )
         await message.answer(save_msg, reply_markup=decision_keyboard(draft.id or 0))
@@ -224,15 +225,15 @@ async def save_draft(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     try:
-        notion = NotionSaver(settings)
-        notion.save_draft(draft)
+        obsidian = ObsidianSaver(settings)
+        saved = obsidian.save_draft(draft)
     except Exception as exc:
-        logger.exception("Ошибка сохранения в Notion")
-        await callback.message.answer(f"Не удалось сохранить в Notion: {exc}")
+        logger.exception("Ошибка сохранения в Obsidian")
+        await callback.message.answer(f"Не удалось сохранить в Obsidian: {exc}")
         await callback.answer()
         return
     storage.set_status(draft_id, DraftStatus.SAVED)
-    await callback.message.answer(build_saved_text(draft))
+    await callback.message.answer(f"Сохранено в Obsidian ✓\n\nПапка: {saved['folder']}\nФайл: {saved['path']}")
     await callback.answer()
 
 

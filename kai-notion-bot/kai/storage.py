@@ -26,17 +26,21 @@ class DraftStorage:
                 entry_kind TEXT NOT NULL,
                 notion_target TEXT NOT NULL,
                 created_date TEXT NOT NULL,
-                status TEXT NOT NULL
+                status TEXT NOT NULL,
+                reason TEXT
             )
             """
         )
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(drafts)").fetchall()}
+        if "reason" not in columns:
+            self.conn.execute("ALTER TABLE drafts ADD COLUMN reason TEXT")
         self.conn.commit()
 
     def create_draft(self, draft: Draft) -> Draft:
         cur = self.conn.execute(
             """
-            INSERT INTO drafts (user_id, chat_id, source_text, title, entry_kind, notion_target, created_date, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO drafts (user_id, chat_id, source_text, title, entry_kind, notion_target, created_date, status, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 draft.user_id,
@@ -47,6 +51,7 @@ class DraftStorage:
                 draft.notion_target.value,
                 draft.created_date.isoformat(),
                 draft.status.value,
+                draft.reason,
             ),
         )
         self.conn.commit()
@@ -67,6 +72,7 @@ class DraftStorage:
             notion_target=NotionTarget(row["notion_target"]),
             created_date=date.fromisoformat(row["created_date"]),
             status=DraftStatus(row["status"]),
+            reason=row["reason"],
         )
 
     def set_status(self, draft_id: int, status: DraftStatus) -> None:

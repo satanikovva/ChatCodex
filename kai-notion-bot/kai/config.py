@@ -29,6 +29,19 @@ class Settings(BaseModel):
     kai_memory_db_path: str = Field(default="data/kai_memory.sqlite")
     kai_conversation_db_path: str = Field(default="data/kai_conversation.sqlite")
     kai_conversation_history_limit: int = Field(default=20, ge=1, le=200)
+    obsidian_vault_path: str = Field(default="")
+    obsidian_inbox_dir: str = Field(default="Входящие")
+    obsidian_days_dir: str = Field(default="Дни")
+    obsidian_dreams_dir: str = Field(default="Сны")
+    obsidian_notes_dir: str = Field(default="Заметки")
+    obsidian_observations_dir: str = Field(default="Наблюдения")
+    obsidian_physics_dir: str = Field(default="Физика")
+    obsidian_apv_dir: str = Field(default="АПВ")
+    obsidian_tasks_dir: str = Field(default="Задачи")
+    obsidian_patterns_dir: str = Field(default="Паттерны")
+    obsidian_sources_dir: str = Field(default="Источники")
+    obsidian_templates_dir: str = Field(default="Шаблоны")
+    obsidian_attachments_dir: str = Field(default="Вложения")
 
 
 @lru_cache(maxsize=1)
@@ -54,6 +67,19 @@ def load_settings() -> Settings:
         "kai_memory_db_path": os.getenv("KAI_MEMORY_DB_PATH", "data/kai_memory.sqlite").strip(),
         "kai_conversation_db_path": os.getenv("KAI_CONVERSATION_DB_PATH", "data/kai_conversation.sqlite").strip(),
         "kai_conversation_history_limit": int(os.getenv("KAI_CONVERSATION_HISTORY_LIMIT", "20").strip() or "20"),
+        "obsidian_vault_path": os.getenv("OBSIDIAN_VAULT_PATH", "").strip(),
+        "obsidian_inbox_dir": os.getenv("OBSIDIAN_INBOX_DIR", "Входящие").strip(),
+        "obsidian_days_dir": os.getenv("OBSIDIAN_DAYS_DIR", "Дни").strip(),
+        "obsidian_dreams_dir": os.getenv("OBSIDIAN_DREAMS_DIR", "Сны").strip(),
+        "obsidian_notes_dir": os.getenv("OBSIDIAN_NOTES_DIR", "Заметки").strip(),
+        "obsidian_observations_dir": os.getenv("OBSIDIAN_OBSERVATIONS_DIR", "Наблюдения").strip(),
+        "obsidian_physics_dir": os.getenv("OBSIDIAN_PHYSICS_DIR", "Физика").strip(),
+        "obsidian_apv_dir": os.getenv("OBSIDIAN_APV_DIR", "АПВ").strip(),
+        "obsidian_tasks_dir": os.getenv("OBSIDIAN_TASKS_DIR", "Задачи").strip(),
+        "obsidian_patterns_dir": os.getenv("OBSIDIAN_PATTERNS_DIR", "Паттерны").strip(),
+        "obsidian_sources_dir": os.getenv("OBSIDIAN_SOURCES_DIR", "Источники").strip(),
+        "obsidian_templates_dir": os.getenv("OBSIDIAN_TEMPLATES_DIR", "Шаблоны").strip(),
+        "obsidian_attachments_dir": os.getenv("OBSIDIAN_ATTACHMENTS_DIR", "Вложения").strip(),
     }
     try:
         return Settings.model_validate(raw)

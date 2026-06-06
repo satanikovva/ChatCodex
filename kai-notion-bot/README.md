@@ -1,12 +1,13 @@
 # kai-notion-bot
 
-Telegram-помощник **Кай** для живого диалога и сохранения ценных записей в Notion только после подтверждения.
+Telegram-помощник **Кай** для живого диалога, памяти и сохранения новых записей в Obsidian после подтверждения.
 
 ## Что умеет сейчас
 - Отвечает как LLM-first ассистент через Groq.
 - Учитывает профиль, долговременную память и краткосрочный контекст чата.
-- Предлагает сохранить в Notion только при `should_offer_save=true`.
-- Сохраняет в Notion только после кнопки `Сохранить`.
+- Предлагает сохранить в Obsidian только при `should_offer_save=true`.
+- Сохраняет в Obsidian только после кнопки `Сохранить`.
+- Читает Notion как старый read-only архив для поиска и анализа.
 
 ## Установка
 ```bash
@@ -19,12 +20,29 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 ```
-Заполните токены и ID баз.
+Заполните Telegram/Groq/Notion токены, ID баз Notion для чтения архива и путь к Obsidian vault.
 
 ## Запуск
 ```bash
 python -m kai.bot
 ```
+
+## Obsidian как основное хранилище
+Новые записи Кай больше не сохраняет в Notion. Основное хранилище новых задач, снов, заметок, наблюдений, физических идей и APV-записей — Obsidian vault с обычными Markdown-файлами.
+
+Пример `.env` для Windows vault:
+```env
+OBSIDIAN_VAULT_PATH=C:\Users\Kariandr\Desktop\Кай
+OBSIDIAN_DREAMS_DIR=Сны
+OBSIDIAN_NOTES_DIR=Заметки
+OBSIDIAN_OBSERVATIONS_DIR=Наблюдения
+OBSIDIAN_PHYSICS_DIR=Физика
+OBSIDIAN_APV_DIR=АПВ
+OBSIDIAN_TASKS_DIR=Задачи
+OBSIDIAN_PATTERNS_DIR=Паттерны
+```
+
+Папки создаются автоматически, если их ещё нет. Если файл с таким названием уже существует, Кай создаст вариант с суффиксом `2`, `3` и т.д.
 
 ## Профиль Кая
 Профиль хранится в `data/kai_profile.json`.
@@ -44,17 +62,9 @@ python -m kai.bot
 Контекст чата хранится в `data/kai_conversation.sqlite`.
 Используется для удержания нити разговора и подаётся в LLM вместе с профилем и памятью.
 
-## Как дать доступ integration к базам Notion
-1. Откройте базу в Notion.
-2. Нажмите `Share`.
-3. Добавьте вашу integration.
-
-## Безопасность
-- Ничего не сохраняется в Notion без подтверждения пользователя.
-- Groq не получает Notion токен.
-
-
 ## Чтение Notion
+Notion остаётся старым read-only архивом для поиска, анализа и будущей миграции. Кай не создаёт новые записи в Notion.
+
 Команды:
 - `/recent notes`
 - `/recent dreams`
@@ -62,3 +72,14 @@ python -m kai.bot
 - `/recent apv`
 - `/find ...`
 - `/patterns`
+
+## Как дать доступ integration к базам Notion
+1. Откройте базу в Notion.
+2. Нажмите `Share`.
+3. Добавьте вашу integration.
+
+## Безопасность
+- Ничего не сохраняется без подтверждения пользователя.
+- Новые записи сохраняются в Obsidian Markdown-файлы.
+- Groq не получает Notion token.
+- Notion используется только для чтения старого архива.
