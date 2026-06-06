@@ -10,8 +10,9 @@ from aiogram.types import CallbackQuery, Message
 
 from kai.classifier import make_draft
 from kai.config import load_settings
-from kai.consent import decision_keyboard
+from kai.consent import decision_keyboard, dream_decision_keyboard
 from kai.conversation import ConversationMemory
+from kai.dream_analysis import analyze_dream, format_dream_analysis_for_telegram
 from kai.llm_client import ask_llm
 from kai.memory import KaiMemory
 from kai.obsidian_saver import ObsidianSaver, get_obsidian_folder_label
@@ -48,6 +49,47 @@ ENTRY_MAP = {
     "physics": EntryKind.PHYSICS,
     "apv": EntryKind.APV,
 }
+
+
+def _is_dream_draft(draft: Draft) -> bool:
+    return draft.entry_kind == EntryKind.DREAM or draft.notion_target == NotionTarget.DREAMS
+
+
+def _dream_action_text(draft: Draft) -> str:
+    folder_label = get_obsidian_folder_label(draft, settings)
+    return (
+        "Что сделать со сном?\n"
+        f"Папка: {folder_label}\n"
+        f"Название: {draft.title}"
+    )
+
+
+def _save_offer_text(draft: Draft) -> str:
+    folder_label = get_obsidian_folder_label(draft, settings)
+    return (
+        "Хочешь, сохраню это в Obsidian?\n"
+        f"Папка: {folder_label}\n"
+        f"Название: {draft.title}"
+    )
+
+
+def _analysis_context(chat_id: int) -> tuple[str, str, str]:
+    profile = load_profile(str(BASE_DIR / settings.kai_profile_path))
+    return (
+        format_profile_for_prompt(profile),
+        kmemory.format_for_prompt(limit=20),
+        cmemory.format_recent_messages(chat_id=chat_id, limit=settings.kai_conversation_history_limit),
+    )
+
+
+async def _send_typing(callback: CallbackQuery) -> None:
+    if callback.message:
+        await callback.bot.send_chat_action(chat_id=callback.message.chat.id, action="typing")
+
+
+def _save_draft_to_obsidian(draft: Draft) -> dict:
+    obsidian = ObsidianSaver(settings)
+    return obsidian.save_draft(draft)
 
 
 def _should_use_notion_context(text: str) -> bool:
@@ -198,13 +240,12 @@ async def handle_text(message: Message) -> None:
             draft.reason = decision.reason
 
         draft = storage.create_draft(draft)
-        folder_label = get_obsidian_folder_label(draft, settings)
-        save_msg = (
-            f"Хочешь, сохраню это в Obsidian?\n"
-            f"Папка: {folder_label}\n"
-            f"Название: {draft.title}"
-        )
-        await message.answer(save_msg, reply_markup=decision_keyboard(draft.id or 0))
+        if _is_dream_draft(draft):
+            save_msg = _dream_action_text(draft)
+            await message.answer(save_msg, reply_markup=dream_decision_keyboard(draft.id or 0))
+        else:
+            save_msg = _save_offer_text(draft)
+            await message.answer(save_msg, reply_markup=decision_keyboard(draft.id or 0))
         cmemory.add_message(chat_id, "assistant", save_msg)
 
     cmemory.trim_chat_history(chat_id=chat_id, keep_last=80)
@@ -226,13 +267,85 @@ async def save_draft(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     try:
-        obsidian = ObsidianSaver(settings)
-        saved = obsidian.save_draft(draft)
+        saved = _save_draft_to_obsidian(draft)
     except Exception as exc:
         logger.exception("Ошибка сохранения в Obsidian")
         await callback.message.answer(f"Не удалось сохранить в Obsidian: {exc}")
         await callback.answer()
         return
+    storage.set_status(draft_id, DraftStatus.SAVED)
+    await callback.message.answer(f"Сохранено в Obsidian ✓\nПапка: {saved['folder']}\nФайл: {saved['path']}")
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("analyze:"))
+async def analyze_draft(callback: CallbackQuery) -> None:
+    if not callback.data or not callback.message:
+        await callback.answer()
+        return
+    draft_id = int(callback.data.split(":", maxsplit=1)[1])
+    draft = storage.get_draft(draft_id)
+    if draft is None:
+        await callback.message.answer("Черновик не найден.")
+        await callback.answer()
+        return
+    if not _is_dream_draft(draft):
+        await callback.message.answer("Анализ снов доступен только для черновиков сна.")
+        await callback.answer()
+        return
+
+    await _send_typing(callback)
+    profile_context, memory_context, conversation_context = _analysis_context(draft.chat_id)
+    analysis = analyze_dream(
+        draft.source_text,
+        profile_context=profile_context,
+        memory_context=memory_context,
+        conversation_context=conversation_context,
+    )
+    answer = format_dream_analysis_for_telegram(analysis)
+    await callback.message.answer(answer)
+    cmemory.add_message(draft.chat_id, "assistant", answer)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("save_analyze:"))
+async def save_analyzed_draft(callback: CallbackQuery) -> None:
+    if not callback.data or not callback.message:
+        await callback.answer()
+        return
+    draft_id = int(callback.data.split(":", maxsplit=1)[1])
+    draft = storage.get_draft(draft_id)
+    if draft is None:
+        await callback.message.answer("Черновик не найден.")
+        await callback.answer()
+        return
+    if draft.status != DraftStatus.PENDING:
+        await callback.message.answer("Этот черновик уже обработан.")
+        await callback.answer()
+        return
+    if not _is_dream_draft(draft):
+        await callback.message.answer("Сохранение с анализом доступно только для снов.")
+        await callback.answer()
+        return
+
+    await _send_typing(callback)
+    profile_context, memory_context, conversation_context = _analysis_context(draft.chat_id)
+    analysis = analyze_dream(
+        draft.source_text,
+        profile_context=profile_context,
+        memory_context=memory_context,
+        conversation_context=conversation_context,
+    )
+    draft.analysis_markdown = analysis.obsidian_markdown
+    storage.set_analysis_markdown(draft_id, draft.analysis_markdown)
+    try:
+        saved = _save_draft_to_obsidian(draft)
+    except Exception as exc:
+        logger.exception("Ошибка сохранения сна с анализом в Obsidian")
+        await callback.message.answer(f"Не удалось сохранить в Obsidian: {exc}")
+        await callback.answer()
+        return
+
     storage.set_status(draft_id, DraftStatus.SAVED)
     await callback.message.answer(f"Сохранено в Obsidian ✓\nПапка: {saved['folder']}\nФайл: {saved['path']}")
     await callback.answer()

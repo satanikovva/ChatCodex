@@ -27,20 +27,23 @@ class DraftStorage:
                 notion_target TEXT NOT NULL,
                 created_date TEXT NOT NULL,
                 status TEXT NOT NULL,
-                reason TEXT
+                reason TEXT,
+                analysis_markdown TEXT
             )
             """
         )
         columns = {row[1] for row in self.conn.execute("PRAGMA table_info(drafts)").fetchall()}
         if "reason" not in columns:
             self.conn.execute("ALTER TABLE drafts ADD COLUMN reason TEXT")
+        if "analysis_markdown" not in columns:
+            self.conn.execute("ALTER TABLE drafts ADD COLUMN analysis_markdown TEXT")
         self.conn.commit()
 
     def create_draft(self, draft: Draft) -> Draft:
         cur = self.conn.execute(
             """
-            INSERT INTO drafts (user_id, chat_id, source_text, title, entry_kind, notion_target, created_date, status, reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO drafts (user_id, chat_id, source_text, title, entry_kind, notion_target, created_date, status, reason, analysis_markdown)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 draft.user_id,
@@ -52,6 +55,7 @@ class DraftStorage:
                 draft.created_date.isoformat(),
                 draft.status.value,
                 draft.reason,
+                draft.analysis_markdown,
             ),
         )
         self.conn.commit()
@@ -73,7 +77,12 @@ class DraftStorage:
             created_date=date.fromisoformat(row["created_date"]),
             status=DraftStatus(row["status"]),
             reason=row["reason"],
+            analysis_markdown=row["analysis_markdown"],
         )
+
+    def set_analysis_markdown(self, draft_id: int, analysis_markdown: str | None) -> None:
+        self.conn.execute("UPDATE drafts SET analysis_markdown = ? WHERE id = ?", (analysis_markdown, draft_id))
+        self.conn.commit()
 
     def set_status(self, draft_id: int, status: DraftStatus) -> None:
         self.conn.execute("UPDATE drafts SET status = ? WHERE id = ?", (status.value, draft_id))

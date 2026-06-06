@@ -52,11 +52,21 @@ class ObsidianSaver:
             f"# {draft.title}\n\n"
             "## Текст\n\n"
             f"{draft.source_text}\n\n"
+            f"{_render_analysis_markdown(draft.analysis_markdown)}"
             "## Метаданные\n\n"
             f"- Тип: {type_label}\n"
             f"- Папка: {folder}\n"
             "- Создано Каем: да\n"
         )
+
+
+def _render_analysis_markdown(analysis_markdown: str | None) -> str:
+    if not analysis_markdown or not analysis_markdown.strip():
+        return ""
+    content = analysis_markdown.strip()
+    if content.startswith("## Анализ"):
+        return f"{content}\n\n"
+    return f"## Анализ\n\n{content}\n\n"
 
 
 def get_obsidian_folder_label(draft: Draft, settings: Settings) -> str:

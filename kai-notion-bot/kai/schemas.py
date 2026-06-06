@@ -41,3 +41,4 @@ class Draft:
     created_date: date
     status: DraftStatus = DraftStatus.PENDING
     reason: str | None = None
+    analysis_markdown: str | None = None
