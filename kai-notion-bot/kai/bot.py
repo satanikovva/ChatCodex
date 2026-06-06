@@ -14,7 +14,7 @@ from kai.consent import decision_keyboard
 from kai.conversation import ConversationMemory
 from kai.llm_client import ask_llm
 from kai.memory import KaiMemory
-from kai.obsidian_saver import ObsidianSaver
+from kai.obsidian_saver import ObsidianSaver, get_obsidian_folder_label
 from kai.notion_reader import NotionReader
 from kai.profile import format_profile_for_prompt, load_profile
 from kai.schemas import Draft, DraftStatus, EntryKind, NotionTarget
@@ -198,9 +198,10 @@ async def handle_text(message: Message) -> None:
             draft.reason = decision.reason
 
         draft = storage.create_draft(draft)
+        folder_label = get_obsidian_folder_label(draft, settings)
         save_msg = (
             f"Хочешь, сохраню это в Obsidian?\n"
-            f"Папка: {draft.notion_target.value}\n"
+            f"Папка: {folder_label}\n"
             f"Название: {draft.title}"
         )
         await message.answer(save_msg, reply_markup=decision_keyboard(draft.id or 0))
@@ -233,7 +234,7 @@ async def save_draft(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     storage.set_status(draft_id, DraftStatus.SAVED)
-    await callback.message.answer(f"Сохранено в Obsidian ✓\n\nПапка: {saved['folder']}\nФайл: {saved['path']}")
+    await callback.message.answer(f"Сохранено в Obsidian ✓\nПапка: {saved['folder']}\nФайл: {saved['path']}")
     await callback.answer()
 
 
