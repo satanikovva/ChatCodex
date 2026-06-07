@@ -75,7 +75,7 @@ def _render_custom_markdown(title: str, body: str, properties: dict) -> str:
     today = str(properties.get("date") or date.today().isoformat())
     type_label = str(properties.get("type") or "заметка")
     tags = properties.get("tags") or ["kai", "telegram"]
-    escaped_title = title.replace('"', '\"')
+    escaped_title = title.replace('"', '\\"')
     frontmatter = [
         "---",
         f"type: {type_label}",

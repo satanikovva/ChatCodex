@@ -15,6 +15,9 @@ class DreamAnalysis:
     plot_dynamics: str = ""
     emotional_tone: str = ""
     body_layer: str = ""
+    psychoanalytic_layer: str = ""
+    jungian_layer: str = ""
+    cognitive_layer: str = ""
     possible_patterns: list[str] = field(default_factory=list)
     questions: list[str] = field(default_factory=list)
     obsidian_markdown: str = ""
@@ -23,11 +26,6 @@ class DreamAnalysis:
 def _fallback_analysis() -> DreamAnalysis:
     return DreamAnalysis(
         summary="Не смогла получить полноценный разбор: LLM-модуль анализа снов сейчас недоступен.",
-        symbols=[],
-        plot_dynamics="",
-        emotional_tone="",
-        body_layer="",
-        possible_patterns=[],
         questions=["Попробуем разобрать этот сон позже, когда LLM снова будет доступен?"],
         obsidian_markdown="## Анализ\n\nLLM-модуль анализа снов был недоступен, поэтому структурированный анализ не создан.",
     )
@@ -53,15 +51,19 @@ def analyze_dream(
 Ты не ставишь диагнозы.
 Ты не утверждаешь мистические факты как истину.
 Ты разбираешь сон как символическую, эмоциональную, телесную и сюжетную систему.
-Ты различаешь:
-- факты сна;
-- интерпретации;
-- гипотезы;
-- вопросы для уточнения.
+Ты различаешь факты сна, интерпретации, гипотезы и вопросы для уточнения.
 Ты используешь профиль и память пользователя, если они даны.
 Отвечай на русском.
 Не уходи в общие красивые эпитеты.
 Делай глубокий, но аккуратный анализ.
+
+Требования к глубине:
+- минимум 4 содержательных раздела;
+- опирайся на конкретные детали сна;
+- разбирай не только символы, но и динамику сюжета;
+- покажи связи с психоанализом, Юнгом, когнитивной наукой и телесным опытом;
+- не используй общие слова без связи с деталями;
+- не ставь диагнозы.
 
 Профиль:
 {profile_context}
@@ -74,13 +76,16 @@ def analyze_dream(
 
 Верни только JSON:
 {{
-  "summary": "...",
-  "symbols": ["...", "..."],
-  "plot_dynamics": "...",
-  "emotional_tone": "...",
-  "body_layer": "...",
-  "possible_patterns": ["...", "..."],
-  "questions": ["...", "..."],
+  "summary": "ядро сна с опорой на детали",
+  "symbols": ["символ + краткая привязка к детали сна"],
+  "plot_dynamics": "как движется сюжет и напряжение",
+  "emotional_tone": "эмоциональный тон",
+  "body_layer": "телесный слой и моторика/ощущения",
+  "psychoanalytic_layer": "психоаналитическая гипотеза без диагноза",
+  "jungian_layer": "юнгианский/архетипический слой как гипотеза",
+  "cognitive_layer": "когнитивно-нейронаучная гипотеза",
+  "possible_patterns": ["возможный паттерн, не диагноз"],
+  "questions": ["1-3 вопроса для уточнения"],
   "obsidian_markdown": "## Анализ\n..."
 }}
 """
@@ -114,6 +119,9 @@ def analyze_dream(
             plot_dynamics=str(data.get("plot_dynamics") or ""),
             emotional_tone=str(data.get("emotional_tone") or ""),
             body_layer=str(data.get("body_layer") or ""),
+            psychoanalytic_layer=str(data.get("psychoanalytic_layer") or ""),
+            jungian_layer=str(data.get("jungian_layer") or ""),
+            cognitive_layer=str(data.get("cognitive_layer") or ""),
             possible_patterns=_as_str_list(data.get("possible_patterns")),
             questions=_as_str_list(data.get("questions")),
             obsidian_markdown=str(data.get("obsidian_markdown") or "").strip(),
@@ -123,16 +131,28 @@ def analyze_dream(
 
 
 def format_dream_analysis_for_telegram(analysis: DreamAnalysis, max_length: int = 3500) -> str:
-    symbols = ", ".join(analysis.symbols) if analysis.symbols else "не выделены явно"
-    patterns = "; ".join(analysis.possible_patterns) if analysis.possible_patterns else "пока без уверенного паттерна"
-    questions = "\n".join(f"- {question}" for question in analysis.questions) if analysis.questions else "- Что в этом сне сильнее всего осталось в теле/эмоции?"
+    symbols = "\n".join(f"   - {symbol}" for symbol in analysis.symbols) if analysis.symbols else "   - не выделены явно"
+    patterns = "\n".join(f"   - {pattern}" for pattern in analysis.possible_patterns) if analysis.possible_patterns else "   - пока без уверенного паттерна"
+    questions = "\n".join(f"   - {question}" for question in analysis.questions) if analysis.questions else "   - Что в этом сне сильнее всего осталось в теле/эмоции?"
     text = (
         "Разбор сна:\n\n"
-        f"1. Ядро сна: {analysis.summary or 'сон требует дополнительного уточнения.'}\n"
-        f"2. Символы: {symbols}\n"
-        f"3. Динамика: {analysis.plot_dynamics or 'динамика не выделена.'}\n"
-        f"4. Возможный паттерн: {patterns}\n"
-        f"5. Вопросы:\n{questions}"
+        "1. Ядро сна\n"
+        f"   {analysis.summary or 'Сон требует дополнительного уточнения.'}\n\n"
+        "2. Символы и динамика\n"
+        f"{symbols}\n"
+        f"   Динамика: {analysis.plot_dynamics or 'не выделена.'}\n"
+        f"   Эмоциональный тон: {analysis.emotional_tone or 'не выделен.'}\n\n"
+        "3. Психоаналитический слой\n"
+        f"   {analysis.psychoanalytic_layer or 'Недостаточно данных для аккуратной психоаналитической гипотезы.'}\n\n"
+        "4. Юнгианский/архетипический слой\n"
+        f"   {analysis.jungian_layer or 'Архетипический слой пока лучше держать как открытую гипотезу.'}\n\n"
+        "5. Когнитивно-телесный слой\n"
+        f"   {analysis.cognitive_layer or 'Когнитивный слой не выделен.'}\n"
+        f"   Телесность: {analysis.body_layer or 'телесный слой не выделен.'}\n\n"
+        "6. Возможные паттерны\n"
+        f"{patterns}\n\n"
+        "7. Вопросы\n"
+        f"{questions}"
     )
     if len(text) <= max_length:
         return text
