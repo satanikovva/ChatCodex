@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
 
 from kai.config import Settings
@@ -26,6 +27,16 @@ class ObsidianSaver:
         path = self._next_available_path(folder_path, f"{date_prefix} - {safe_title}")
         path.write_text(self._render_markdown(draft, folder), encoding="utf-8")
         return {"path": str(path), "folder": folder, "title": draft.title}
+
+    def save_markdown(self, title: str, folder: str, body: str, properties: dict | None = None) -> dict:
+        folder_path = self.vault_path / folder
+        folder_path.mkdir(parents=True, exist_ok=True)
+
+        today = date.today().isoformat()
+        safe_title = safe_filename(title)
+        path = self._next_available_path(folder_path, f"{today} - {safe_title}")
+        path.write_text(_render_custom_markdown(title, body, properties or {}), encoding="utf-8")
+        return {"path": str(path), "folder": folder, "title": title}
 
     def _next_available_path(self, folder_path: Path, stem: str) -> Path:
         candidate = folder_path / f"{stem}.md"
@@ -58,6 +69,26 @@ class ObsidianSaver:
             f"- Папка: {folder}\n"
             "- Создано Каем: да\n"
         )
+
+
+def _render_custom_markdown(title: str, body: str, properties: dict) -> str:
+    today = str(properties.get("date") or date.today().isoformat())
+    type_label = str(properties.get("type") or "заметка")
+    tags = properties.get("tags") or ["kai", "telegram"]
+    escaped_title = title.replace('"', '\"')
+    frontmatter = [
+        "---",
+        f"type: {type_label}",
+        f'title: "{escaped_title}"',
+        f"date: {today}",
+        f"source: {properties.get('source') or 'telegram'}",
+        f"created_by: {properties.get('created_by') or 'kai'}",
+        "tags:",
+    ]
+    for tag in tags:
+        frontmatter.append(f"  - {tag}")
+    frontmatter.append("---")
+    return "\n".join(frontmatter) + f"\n\n# {title}\n\n{body.strip()}\n"
 
 
 def _render_analysis_markdown(analysis_markdown: str | None) -> str:

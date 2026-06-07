@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import date
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
@@ -18,6 +19,7 @@ from kai.memory import KaiMemory
 from kai.obsidian_saver import ObsidianSaver, get_obsidian_folder_label
 from kai.notion_reader import NotionReader
 from kai.profile import format_profile_for_prompt, load_profile
+from kai.save_intent import SaveIntent, detect_save_intent
 from kai.schemas import Draft, DraftStatus, EntryKind, NotionTarget
 from kai.storage import DraftStorage
 
@@ -92,6 +94,157 @@ def _save_draft_to_obsidian(draft: Draft) -> dict:
     return obsidian.save_draft(draft)
 
 
+TARGET_FOLDER_MAP = {
+    "dreams": lambda: settings.obsidian_dreams_dir,
+    "notes": lambda: settings.obsidian_notes_dir,
+    "observations": lambda: settings.obsidian_observations_dir,
+    "physics": lambda: settings.obsidian_physics_dir,
+    "apv": lambda: settings.obsidian_apv_dir,
+    "tasks": lambda: settings.obsidian_tasks_dir,
+    "patterns": lambda: settings.obsidian_patterns_dir,
+    "inbox": lambda: settings.obsidian_inbox_dir,
+}
+
+
+def _folder_for_save_target(target: str | None) -> str:
+    getter = TARGET_FOLDER_MAP.get(target or "inbox", TARGET_FOLDER_MAP["inbox"])
+    return getter()
+
+
+def _format_messages(messages: list[dict]) -> str:
+    if not messages:
+        return "(контекст пуст)"
+    return "\n".join(f"{message['role']}: {message['content']}" for message in messages)
+
+
+def _last_user_message(messages: list[dict]) -> str | None:
+    for message in reversed(messages):
+        if message["role"] == "user" and message["content"].strip():
+            return message["content"].strip()
+    return None
+
+
+def _last_dream_text(messages: list[dict]) -> str | None:
+    dream_markers = ("присни", "снилось", "сон", "во сне")
+    for message in reversed(messages):
+        content = message["content"].strip()
+        if message["role"] == "user" and any(marker in content.lower() for marker in dream_markers):
+            return content
+    return _last_user_message(messages)
+
+
+def _last_analysis_text(messages: list[dict]) -> str | None:
+    for message in reversed(messages):
+        content = message["content"].strip()
+        lowered = content.lower()
+        if message["role"] == "assistant" and ("разбор сна" in lowered or "ядро сна" in lowered or "## анализ" in lowered):
+            return content
+    return None
+
+
+def _title_from_text(text: str, fallback: str = "Запись Кая") -> str:
+    words = [word.strip('.,!?;:()[]{}«»"') for word in text.split()]
+    words = [word for word in words if word]
+    if not words:
+        return fallback
+    return " ".join(words[:7])
+
+
+def _strip_save_command(text: str) -> str:
+    normalized = text.strip()
+    for trigger in ("сохрани это", "запиши это", "сохрани", "запиши", "зафиксируй"):
+        if normalized.lower().startswith(trigger):
+            return normalized[len(trigger):].strip(" :—-\n")
+    return normalized
+
+
+def _is_only_save_routing_text(text: str) -> bool:
+    normalized = " ".join(text.lower().split())
+    if not normalized:
+        return True
+    routing_phrases = {
+        "это",
+        "в obsidian",
+        "в обсидиан",
+        "в физику",
+        "в физика",
+        "в апв",
+        "в apv",
+        "в задачи",
+        "в заметки",
+        "в сны",
+        "в наблюдения",
+        "в паттерны",
+    }
+    return normalized in routing_phrases
+
+
+def _obsidian_tags(*extra: str) -> list[str]:
+    return ["kai", "telegram", *[tag for tag in extra if tag]]
+
+
+def _build_dream_body(dream_text: str, analysis_markdown: str, context: str, folder: str) -> str:
+    analysis = analysis_markdown.strip()
+    if analysis.startswith("## Анализ"):
+        analysis = analysis.removeprefix("## Анализ").strip()
+    return (
+        "## Текст сна\n\n"
+        f"{dream_text.strip()}\n\n"
+        "## Анализ\n\n"
+        f"{analysis or 'Анализ пока не создан.'}\n\n"
+        "## Контекст разговора\n\n"
+        f"{context.strip()}\n\n"
+        "## Метаданные\n\n"
+        "- Тип: сон\n"
+        f"- Папка: {folder}\n"
+        "- Создано Каем: да"
+    )
+
+
+def _build_conversation_body(context: str, folder: str) -> str:
+    return (
+        "## Диалог\n\n"
+        f"{context.strip()}\n\n"
+        "## Метаданные\n\n"
+        "- Тип: диалог\n"
+        f"- Папка: {folder}\n"
+        "- Создано Каем: да"
+    )
+
+
+def _build_simple_body(content: str, type_label: str, folder: str) -> str:
+    return (
+        "## Текст\n\n"
+        f"{content.strip()}\n\n"
+        "## Метаданные\n\n"
+        f"- Тип: {type_label}\n"
+        f"- Папка: {folder}\n"
+        "- Создано Каем: да"
+    )
+
+
+def _type_for_target(target: str | None) -> str:
+    return {
+        "dreams": "сон",
+        "physics": "физика",
+        "apv": "апв",
+        "tasks": "задача",
+        "observations": "наблюдение",
+        "patterns": "паттерн",
+        "notes": "заметка",
+        "inbox": "заметка",
+    }.get(target or "inbox", "заметка")
+
+
+def _is_dream_analysis_request(text: str) -> bool:
+    normalized = text.lower()
+    return "сон" in normalized and any(word in normalized for word in ("проанализ", "разбери", "разбор"))
+
+
+async def _send_message_typing(message: Message) -> None:
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+
 def _should_use_notion_context(text: str) -> bool:
     t = text.lower()
     triggers = (
@@ -104,6 +257,119 @@ def _should_use_notion_context(text: str) -> bool:
         "посмотри в notion",
     )
     return any(x in t for x in triggers)
+
+
+async def _handle_dream_analysis_request(message: Message, profile_context: str, memory_context: str, conversation_context: str, recent_messages: list[dict]) -> bool:
+    if not _is_dream_analysis_request(message.text or ""):
+        return False
+    dream_text = _last_dream_text(recent_messages)
+    if not dream_text:
+        answer = "Я могу разобрать сон, но сначала пришли само описание сна — без него буду гадать по туману."
+        cmemory.add_message(message.chat.id, "user", message.text or "")
+        await message.answer(answer)
+        cmemory.add_message(message.chat.id, "assistant", answer)
+        return True
+
+    cmemory.add_message(message.chat.id, "user", message.text or "")
+    await _send_message_typing(message)
+    analysis = analyze_dream(
+        dream_text,
+        profile_context=profile_context,
+        memory_context=memory_context,
+        conversation_context=conversation_context,
+    )
+    answer = format_dream_analysis_for_telegram(analysis)
+    await message.answer(answer)
+    cmemory.add_message(message.chat.id, "assistant", answer)
+    cmemory.trim_chat_history(chat_id=message.chat.id, keep_last=80)
+    return True
+
+
+async def _handle_explicit_save(message: Message, intent: SaveIntent, profile_context: str, memory_context: str, conversation_context: str, recent_messages: list[dict]) -> bool:
+    if not intent.should_save:
+        return False
+
+    cmemory.add_message(message.chat.id, "user", message.text or "")
+    await _send_message_typing(message)
+
+    try:
+        saved = _save_explicit_content(message.text or "", intent, profile_context, memory_context, conversation_context, recent_messages)
+    except Exception as exc:
+        logger.exception("Ошибка explicit-save в Obsidian")
+        answer = f"Не удалось сохранить в Obsidian: {exc}"
+        await message.answer(answer)
+        cmemory.add_message(message.chat.id, "assistant", answer)
+        return True
+
+    answer = f"Сохранил в Obsidian ✓\nПапка: {saved['folder']}\nФайл: {saved['path']}"
+    await message.answer(answer)
+    cmemory.add_message(message.chat.id, "assistant", answer)
+    cmemory.trim_chat_history(chat_id=message.chat.id, keep_last=80)
+    return True
+
+
+def _save_explicit_content(command_text: str, intent: SaveIntent, profile_context: str, memory_context: str, conversation_context: str, recent_messages: list[dict]) -> dict:
+    obsidian = ObsidianSaver(settings)
+    context = _format_messages(recent_messages)
+
+    if intent.mode == "recent_conversation":
+        folder = _folder_for_save_target(intent.target or "notes")
+        title = f"Диалог с Каем {date.today().isoformat()}"
+        body = _build_conversation_body(context, folder)
+        return obsidian.save_markdown(
+            title=title,
+            folder=folder,
+            body=body,
+            properties={"type": "диалог", "tags": _obsidian_tags("диалог")},
+        )
+
+    if intent.mode == "dream_with_analysis":
+        folder = _folder_for_save_target("dreams")
+        dream_text = _last_dream_text(recent_messages) or _strip_save_command(command_text)
+        last_analysis = _last_analysis_text(recent_messages)
+        if last_analysis:
+            analysis_markdown = f"## Анализ\n\n{last_analysis}"
+        else:
+            analysis = analyze_dream(
+                dream_text,
+                profile_context=profile_context,
+                memory_context=memory_context,
+                conversation_context=conversation_context,
+            )
+            analysis_markdown = analysis.obsidian_markdown
+        title = _title_from_text(dream_text, fallback="Сон")
+        body = _build_dream_body(dream_text, analysis_markdown, context, folder)
+        return obsidian.save_markdown(
+            title=title,
+            folder=folder,
+            body=body,
+            properties={"type": "сон", "tags": _obsidian_tags("сон")},
+        )
+
+    if intent.mode == "analysis_only":
+        folder = _folder_for_save_target(intent.target or "dreams")
+        analysis_text = _last_analysis_text(recent_messages) or "Анализ в текущем контексте не найден."
+        dream_text = _last_dream_text(recent_messages) or "Связанный сон в текущем контексте не найден."
+        body = _build_dream_body(dream_text, f"## Анализ\n\n{analysis_text}", context, folder)
+        return obsidian.save_markdown(
+            title="Анализ сна",
+            folder=folder,
+            body=body,
+            properties={"type": "сон", "tags": _obsidian_tags("сон", "анализ")},
+        )
+
+    folder = _folder_for_save_target(intent.target)
+    explicit_content = _strip_save_command(command_text)
+    if _is_only_save_routing_text(explicit_content):
+        explicit_content = _last_user_message(recent_messages) or command_text
+    type_label = _type_for_target(intent.target)
+    body = _build_simple_body(explicit_content, type_label, folder)
+    return obsidian.save_markdown(
+        title=_title_from_text(explicit_content),
+        folder=folder,
+        body=body,
+        properties={"type": type_label, "tags": _obsidian_tags(type_label)},
+    )
 
 
 @dp.message(Command("recent"))
@@ -195,10 +461,18 @@ async def handle_text(message: Message) -> None:
         return
 
     chat_id = message.chat.id
+    recent_messages = cmemory.get_recent_messages(chat_id=chat_id, limit=30)
     profile = load_profile(str(BASE_DIR / settings.kai_profile_path))
     profile_context = format_profile_for_prompt(profile)
     memory_context = kmemory.format_for_prompt(limit=20)
-    conversation_context = cmemory.format_recent_messages(chat_id=chat_id, limit=settings.kai_conversation_history_limit)
+    conversation_context = _format_messages(recent_messages[-settings.kai_conversation_history_limit:])
+
+    save_intent = detect_save_intent(message.text)
+    if await _handle_explicit_save(message, save_intent, profile_context, memory_context, conversation_context, recent_messages):
+        return
+
+    if await _handle_dream_analysis_request(message, profile_context, memory_context, conversation_context, recent_messages):
+        return
 
     notion_context = ""
     if _should_use_notion_context(message.text):
@@ -214,40 +488,13 @@ async def handle_text(message: Message) -> None:
         notion_context=notion_context,
     )
 
+    reply = decision.reply
+    if decision.should_offer_save and "сохрани" not in reply.lower():
+        reply = f"{reply}\n\nЕсли захочешь, скажи: ‘сохрани это’."
+
     cmemory.add_message(chat_id, "user", message.text)
-    await message.answer(decision.reply)
-    cmemory.add_message(chat_id, "assistant", decision.reply)
-
-    if decision.should_offer_save:
-        mapped_target = TARGET_MAP.get((decision.save_target or "").lower())
-        mapped_entry = ENTRY_MAP.get((decision.entry_kind or "").lower())
-        if mapped_target and mapped_entry:
-            fallback = make_draft(message.from_user.id, message.chat.id, message.text)
-            draft = Draft(
-                id=None,
-                user_id=message.from_user.id,
-                chat_id=message.chat.id,
-                source_text=decision.text_to_save or message.text,
-                title=decision.title or fallback.title,
-                entry_kind=mapped_entry,
-                notion_target=mapped_target,
-                created_date=fallback.created_date,
-                status=DraftStatus.PENDING,
-                reason=decision.reason,
-            )
-        else:
-            draft = make_draft(message.from_user.id, message.chat.id, decision.text_to_save or message.text)
-            draft.reason = decision.reason
-
-        draft = storage.create_draft(draft)
-        if _is_dream_draft(draft):
-            save_msg = _dream_action_text(draft)
-            await message.answer(save_msg, reply_markup=dream_decision_keyboard(draft.id or 0))
-        else:
-            save_msg = _save_offer_text(draft)
-            await message.answer(save_msg, reply_markup=decision_keyboard(draft.id or 0))
-        cmemory.add_message(chat_id, "assistant", save_msg)
-
+    await message.answer(reply)
+    cmemory.add_message(chat_id, "assistant", reply)
     cmemory.trim_chat_history(chat_id=chat_id, keep_last=80)
 
 
